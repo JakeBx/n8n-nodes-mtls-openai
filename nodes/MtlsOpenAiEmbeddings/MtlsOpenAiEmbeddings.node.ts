@@ -1,0 +1,178 @@
+import {
+	INodeType,
+	INodeTypeDescription,
+	ISupplyDataFunctions,
+	SupplyData,
+} from 'n8n-workflow';
+import { OpenAIEmbeddings, type ClientOptions } from '@langchain/openai';
+import {
+	createHttpsAgent,
+	buildCustomHeaders,
+	type IMtlsOpenAiApiCredentials,
+} from '../utils/sslHelper';
+
+export class MtlsOpenAiEmbeddings implements INodeType {
+	description: INodeTypeDescription = {
+		displayName: 'mTLS OpenAI Embeddings',
+		name: 'mtlsOpenAiEmbeddings',
+		icon: 'file:mtls-openai.svg',
+		group: ['transform'],
+		version: 1,
+		description: 'OpenAI-compatible Embeddings with mTLS x509 client certificate authentication for enterprise auth proxies',
+		defaults: {
+			name: 'mTLS OpenAI Embeddings',
+		},
+		usableAsTool: true,
+		codex: {
+			categories: ['AI'],
+			subcategories: {
+				AI: ['Embeddings'],
+			},
+			resources: {
+				primaryDocumentation: [
+					{
+						url: 'https://github.com/JakeBx/n8n-nodes-mtls-openai',
+					},
+				],
+			},
+		},
+		inputs: [],
+		outputs: ['ai_embedding' as const],
+		outputNames: ['Embeddings'],
+		credentials: [
+			{
+				name: 'mtlsOpenAiApi',
+				required: true,
+			},
+		],
+		properties: [
+			{
+				displayName: 'Model',
+				name: 'model',
+				type: 'string',
+				default: 'text-embedding-ada-002',
+				description: 'The model to use for generating embeddings',
+			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				options: [
+					{
+						displayName: 'Batch Size',
+						name: 'batchSize',
+						type: 'number',
+						typeOptions: {
+							minValue: 1,
+						},
+						default: 512,
+						description: 'Maximum number of texts to embed in a single request',
+					},
+					{
+						displayName: 'Custom Headers',
+						name: 'customHeaders',
+						type: 'fixedCollection',
+						default: {},
+						typeOptions: {
+							multipleValues: true,
+						},
+						description: 'Custom HTTP headers to include with every request',
+						options: [
+							{
+								name: 'values',
+								displayName: 'Header',
+								values: [
+									{
+										displayName: 'Name',
+										name: 'name',
+										type: 'string',
+										default: '',
+										description: 'Header name',
+									},
+									{
+										displayName: 'Value',
+										name: 'value',
+										type: 'string',
+										default: '',
+										description: 'Header value',
+									},
+								],
+							},
+						],
+					},
+					{
+						displayName: 'Strip New Lines',
+						name: 'stripNewLines',
+						type: 'boolean',
+						default: true,
+						description: 'Whether to strip newline characters from input text before embedding',
+					},
+					{
+						displayName: 'Timeout',
+						name: 'timeout',
+						type: 'number',
+						typeOptions: {
+							minValue: 0,
+						},
+						default: 300000,
+						description: 'Request timeout in milliseconds (default 5 minutes for CPU inference)',
+					},
+				],
+			},
+		],
+	};
+
+	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
+		const credentials = await this.getCredentials<IMtlsOpenAiApiCredentials>('mtlsOpenAiApi');
+		const model = this.getNodeParameter('model', itemIndex, 'text-embedding-ada-002') as string;
+		const options = this.getNodeParameter('options', itemIndex, {}) as {
+			batchSize?: number;
+			stripNewLines?: boolean;
+			timeout?: number;
+			customHeaders?: { values?: Array<{ name: string; value: string }> };
+		};
+
+		// Build HTTPS agent for mTLS from credential SSL fields
+		const httpsAgent = createHttpsAgent(credentials);
+
+		// Build custom headers from node options
+		const customHeaders = buildCustomHeaders(options.customHeaders);
+
+		// Configure client options
+		const clientOptions: ClientOptions = {};
+		if (httpsAgent) {
+			clientOptions.httpAgent = httpsAgent;
+		}
+		if (Object.keys(customHeaders).length > 0) {
+			clientOptions.defaultHeaders = customHeaders;
+		}
+
+		// Build OpenAIEmbeddings configuration
+		const embeddingsConfig: ConstructorParameters<typeof OpenAIEmbeddings>[0] = {
+			modelName: model,
+			openAIApiKey: credentials.apiKey || 'not-needed',
+			configuration: {
+				baseURL: credentials.baseUrl,
+				...clientOptions,
+			},
+		};
+
+		if (options.batchSize !== undefined) {
+			embeddingsConfig.batchSize = options.batchSize;
+		}
+		if (options.stripNewLines !== undefined) {
+			embeddingsConfig.stripNewLines = options.stripNewLines;
+		}
+		if (options.timeout !== undefined) {
+			embeddingsConfig.timeout = options.timeout;
+		}
+
+		const embeddings = new OpenAIEmbeddings(embeddingsConfig);
+
+		return {
+			response: embeddings,
+		};
+	}
+}

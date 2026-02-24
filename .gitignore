@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+n8n-nodes-mtls-openai/dist/
+
+# Generated certificates (contain private keys!)
+certs/output/
+
+# n8n data
+.n8n/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Docker volumes (local data)
+docker/data/
