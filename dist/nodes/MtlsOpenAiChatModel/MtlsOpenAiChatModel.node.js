@@ -1,6 +1,40 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MtlsOpenAiChatModel = void 0;
+const https = __importStar(require("https"));
 const openai_1 = require("@langchain/openai");
 const sslHelper_1 = require("../utils/sslHelper");
 class MtlsOpenAiChatModel {
@@ -36,6 +70,8 @@ class MtlsOpenAiChatModel {
                 {
                     name: 'mtlsOpenAiApi',
                     required: true,
+                    // Run a real mTLS-authenticated test rather than a plain HTTP request
+                    testedBy: 'testMtlsOpenAiCredentials',
                 },
             ],
             properties: [
@@ -156,6 +192,66 @@ class MtlsOpenAiChatModel {
                     ],
                 },
             ],
+        };
+        this.methods = {
+            credentialTest: {
+                /**
+                 * Validates the mTLS credential by making a native https.request() with the
+                 * client certificate/key attached. This enforces actual mTLS authentication
+                 * — unlike ICredentialTestRequest which cannot attach a custom https.Agent.
+                 */
+                async testMtlsOpenAiCredentials(credential) {
+                    const creds = credential.data;
+                    if (!creds.baseUrl) {
+                        return { status: 'Error', message: 'Base URL is required' };
+                    }
+                    const agent = (0, sslHelper_1.createHttpsAgent)(creds);
+                    return new Promise((resolve) => {
+                        let url;
+                        try {
+                            url = new URL(`${creds.baseUrl}/models`);
+                        }
+                        catch {
+                            resolve({ status: 'Error', message: `Invalid Base URL: ${creds.baseUrl}` });
+                            return;
+                        }
+                        const options = {
+                            hostname: url.hostname,
+                            port: url.port || 443,
+                            path: url.pathname + url.search,
+                            method: 'GET',
+                            agent,
+                            headers: {
+                                Authorization: `Bearer ${creds.apiKey || 'n8n-test'}`,
+                            },
+                            timeout: 10000,
+                        };
+                        const req = https.request(options, (res) => {
+                            var _a;
+                            // Drain the response body so the socket is released
+                            res.resume();
+                            // Any HTTP response (even 401/403) means mTLS + network are working
+                            if (((_a = res.statusCode) !== null && _a !== void 0 ? _a : 0) < 500) {
+                                resolve({ status: 'OK', message: 'mTLS connection successful' });
+                            }
+                            else {
+                                resolve({
+                                    status: 'Error',
+                                    message: `Server returned HTTP ${res.statusCode}`,
+                                });
+                            }
+                        });
+                        req.on('timeout', () => {
+                            req.destroy();
+                            resolve({ status: 'Error', message: 'Connection timed out' });
+                        });
+                        req.on('error', (err) => {
+                            resolve({ status: 'Error', message: err.message });
+                        });
+                        req.end();
+                    });
+                },
+            },
         };
     }
     async supplyData(itemIndex) {

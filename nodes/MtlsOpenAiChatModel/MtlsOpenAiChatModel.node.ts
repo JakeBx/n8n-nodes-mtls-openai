@@ -1,4 +1,8 @@
+import * as https from 'https';
 import {
+	ICredentialTestFunctions,
+	ICredentialsDecrypted,
+	INodeCredentialTestResult,
 	INodeType,
 	INodeTypeDescription,
 	ISupplyDataFunctions,
@@ -43,6 +47,8 @@ export class MtlsOpenAiChatModel implements INodeType {
 			{
 				name: 'mtlsOpenAiApi',
 				required: true,
+				// Run a real mTLS-authenticated test rather than a plain HTTP request
+				testedBy: 'testMtlsOpenAiCredentials',
 			},
 		],
 		properties: [
@@ -163,6 +169,75 @@ export class MtlsOpenAiChatModel implements INodeType {
 				],
 			},
 		],
+	};
+
+	methods = {
+		credentialTest: {
+			/**
+			 * Validates the mTLS credential by making a native https.request() with the
+			 * client certificate/key attached. This enforces actual mTLS authentication
+			 * — unlike ICredentialTestRequest which cannot attach a custom https.Agent.
+			 */
+			async testMtlsOpenAiCredentials(
+				this: ICredentialTestFunctions,
+				credential: ICredentialsDecrypted,
+			): Promise<INodeCredentialTestResult> {
+				const creds = credential.data as unknown as IMtlsOpenAiApiCredentials;
+
+				if (!creds.baseUrl) {
+					return { status: 'Error', message: 'Base URL is required' };
+				}
+
+				const agent = createHttpsAgent(creds);
+
+				return new Promise((resolve) => {
+					let url: URL;
+					try {
+						url = new URL(`${creds.baseUrl}/models`);
+					} catch {
+						resolve({ status: 'Error', message: `Invalid Base URL: ${creds.baseUrl}` });
+						return;
+					}
+
+					const options: https.RequestOptions = {
+						hostname: url.hostname,
+						port: url.port || 443,
+						path: url.pathname + url.search,
+						method: 'GET',
+						agent,
+						headers: {
+							Authorization: `Bearer ${creds.apiKey || 'n8n-test'}`,
+						},
+						timeout: 10_000,
+					};
+
+					const req = https.request(options, (res) => {
+						// Drain the response body so the socket is released
+						res.resume();
+						// Any HTTP response (even 401/403) means mTLS + network are working
+						if ((res.statusCode ?? 0) < 500) {
+							resolve({ status: 'OK', message: 'mTLS connection successful' });
+						} else {
+							resolve({
+								status: 'Error',
+								message: `Server returned HTTP ${res.statusCode}`,
+							});
+						}
+					});
+
+					req.on('timeout', () => {
+						req.destroy();
+						resolve({ status: 'Error', message: 'Connection timed out' });
+					});
+
+					req.on('error', (err: Error) => {
+						resolve({ status: 'Error', message: err.message });
+					});
+
+					req.end();
+				});
+			},
+		},
 	};
 
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {

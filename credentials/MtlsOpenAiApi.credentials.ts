@@ -1,5 +1,4 @@
 import {
-	ICredentialTestRequest,
 	ICredentialType,
 	INodeProperties,
 } from 'n8n-workflow';
@@ -10,18 +9,10 @@ export class MtlsOpenAiApi implements ICredentialType {
 	icon = 'fa:lock' as const;
 	documentationUrl = 'https://github.com/JakeBx/n8n-nodes-mtls-openai';
 
-	// Tests basic connectivity to the endpoint. Note: this test does NOT verify
-	// mTLS client certificates — certificate validation is performed at runtime
-	// when the node makes requests.
-	test: ICredentialTestRequest = {
-		request: {
-			baseURL: '={{$credentials.baseUrl}}',
-			url: '/models',
-			headers: {
-				Authorization: '=Bearer {{$credentials.apiKey || "n8n-test"}}',
-			},
-		},
-	};
+	// No static ICredentialTestRequest here — ICredentialTestRequest cannot
+	// attach a custom https.Agent so it cannot present client certificates.
+	// Actual mTLS credential testing is handled by the nodes via testedBy /
+	// methods.credentialTest, which uses native https.request() + createHttpsAgent().
 
 	properties: INodeProperties[] = [
 		{
