@@ -30,7 +30,7 @@ export class MtlsOpenAiChatModel implements INodeType {
 		codex: {
 			categories: ['AI'],
 			subcategories: {
-				AI: ['Language Models', 'Root Nodes'],
+				AI: ['Language Models', 'Chat Models'],
 			},
 			resources: {
 				primaryDocumentation: [
