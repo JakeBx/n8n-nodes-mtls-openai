@@ -58,6 +58,13 @@ Create a new **mTLS OpenAI API** credential with the following fields:
 - **LiteLLM proxy**: Route through LiteLLM with mTLS authentication
 - **Any OpenAI-compatible API**: Works with any service that implements the OpenAI API specification and requires client certificate authentication
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MTLS_SKIP_HOSTNAME_VERIFICATION` | *(unset)* | Set to `true` to disable TLS hostname/SAN verification when a private CA certificate is configured. Useful for Docker Desktop where `host.docker.internal` is not in the server cert's SANs. **Do not enable in production** — it weakens TLS security by skipping hostname checks (CA chain validation still applies). |
+| `N8N_LOG_LEVEL` | `info` | When set to `debug`, the mTLS nodes emit per-request debug lines via `console.debug`. No certificate contents, API keys, or authorization headers are logged — only request method, hostname, path, and boolean status flags. |
+
 ## Architecture
 
 ```

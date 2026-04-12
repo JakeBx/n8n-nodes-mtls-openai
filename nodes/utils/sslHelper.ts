@@ -13,6 +13,20 @@ export interface IMtlsOpenAiApiCredentials {
 }
 
 /**
+ * Conditional debug logger — only emits when N8N_LOG_LEVEL=debug.
+ *
+ * Rules:
+ * - Never log certificate contents, API keys, passphrases, or full request headers.
+ * - Safe: request method, URL hostname + path, boolean flags, HTTP status codes.
+ */
+export function debugLog(...args: unknown[]): void {
+	if (process.env.N8N_LOG_LEVEL === 'debug') {
+		// eslint-disable-next-line no-console
+		console.debug('[mTLS]', ...args);
+	}
+}
+
+/**
  * Normalizes a PEM string that may have had its newlines stripped.
  * PEM format requires line breaks after the header, every 64 characters
  * of Base64 content, and before the footer.
@@ -85,6 +99,14 @@ export function createHttpsAgent(credentials: IMtlsOpenAiApiCredentials): https.
 
 	if (hasCa) {
 		agentOptions.ca = normalizePem(credentials.caCertificate!);
+		// Hostname/SAN verification bypass is opt-in via env var.
+		// When MTLS_SKIP_HOSTNAME_VERIFICATION=true, connections succeed even if the
+		// serving hostname (e.g. host.docker.internal) is absent from the server cert's
+		// SANs. CA chain validation still applies. DO NOT enable in production.
+		if (process.env.MTLS_SKIP_HOSTNAME_VERIFICATION?.toLowerCase() === 'true') {
+			agentOptions.checkServerIdentity = () => undefined;
+			debugLog('hostname verification disabled via MTLS_SKIP_HOSTNAME_VERIFICATION');
+		}
 	}
 	if (hasCert) {
 		agentOptions.cert = normalizePem(credentials.clientCertificate!);
@@ -97,6 +119,125 @@ export function createHttpsAgent(credentials: IMtlsOpenAiApiCredentials): https.
 	}
 
 	return new https.Agent(agentOptions);
+}
+
+/**
+ * Creates a custom fetch function that routes requests through the mTLS HTTPS agent.
+ *
+ * Node.js 22 uses native fetch (undici) where the OpenAI SDK's `httpAgent` option is
+ * silently ignored — undici requires a `dispatcher`, not an `http.Agent`. Passing a
+ * custom `fetch` via ClientOptions is the supported escape hatch: the OpenAI SDK calls
+ * whatever fetch function you supply, so we route it through `https.request` (which
+ * honours our https.Agent with client certificates) and wrap the result in a standard
+ * Response object.
+ *
+ * Returns undefined when no certificate fields are configured, leaving the SDK to use
+ * its default fetch for plain API-key-only connections.
+ */
+export function createMtlsFetch(
+	credentials: IMtlsOpenAiApiCredentials,
+): ((input: string | URL, init?: RequestInit) => Promise<Response>) | undefined {
+	const agent = createHttpsAgent(credentials);
+	if (!agent) return undefined;
+
+	return async (input: string | URL, init?: RequestInit): Promise<Response> => {
+		const url = new URL(typeof input === 'string' ? input : input.href);
+		debugLog('-->', init?.method ?? 'GET', url.hostname + url.pathname);
+
+		// Flatten Headers / array / plain-object into a simple Record
+		const headers: Record<string, string> = {};
+		if (init?.headers) {
+			if (init.headers instanceof Headers) {
+				init.headers.forEach((val: string, key: string) => {
+					headers[key] = val;
+				});
+			} else if (Array.isArray(init.headers)) {
+				for (const [key, val] of init.headers as [string, string][]) {
+					headers[key] = val;
+				}
+			} else {
+				Object.assign(headers, init.headers as Record<string, string>);
+			}
+		}
+
+		const body = init?.body;
+
+		return new Promise<Response>((resolve, reject) => {
+			const req = https.request(
+				{
+					hostname: url.hostname,
+					port: url.port || '443',
+					path: url.pathname + (url.search || ''),
+					method: init?.method ?? 'GET',
+					headers,
+					agent,
+				},
+				(res) => {
+					const responseHeaders = new Headers();
+					for (const [key, val] of Object.entries(res.headers)) {
+						if (val != null) {
+							responseHeaders.set(key, Array.isArray(val) ? val.join(', ') : val);
+						}
+					}
+
+					// Use a ReadableStream so the OpenAI SDK can process SSE events
+					// incrementally — required for streaming chat completions used by
+					// n8n's AI Agent nodes.
+					const readable = new ReadableStream({
+						start(controller) {
+							res.on('data', (chunk: Buffer) => controller.enqueue(chunk));
+							res.on('end', () => controller.close());
+							res.on('error', (err: Error) => controller.error(err));
+						},
+					});
+
+					resolve(
+						new Response(readable, {
+							status: res.statusCode ?? 200,
+							headers: responseHeaders,
+						}),
+					);
+				},
+			);
+
+			req.on('error', (err) => {
+				debugLog('request error:', err.message);
+				reject(err);
+			});
+
+			// Write the request body, handling all supported types.
+			if (body != null) {
+				if (typeof body === 'string' || Buffer.isBuffer(body)) {
+					req.write(body);
+					req.end();
+				} else if (body instanceof ArrayBuffer) {
+					req.write(Buffer.from(body));
+					req.end();
+				} else if (body instanceof ReadableStream) {
+					// Pipe ReadableStream chunks into the request, then end.
+					const reader = (body as ReadableStream<Uint8Array>).getReader();
+					const pump = (): void => {
+						reader.read().then(({ done, value }) => {
+							if (done) {
+								req.end();
+								return;
+							}
+							req.write(value);
+							pump();
+						}).catch((err: Error) => {
+							reject(err);
+						});
+					};
+					pump();
+				} else {
+					// Unknown body type — send what we have and let the server decide.
+					req.end();
+				}
+			} else {
+				req.end();
+			}
+		});
+	};
 }
 
 /**

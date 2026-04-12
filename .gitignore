@@ -2,7 +2,7 @@
 node_modules/
 
 # Build output
-n8n-nodes-mtls-openai/dist/
+dist/
 
 # Generated certificates (contain private keys!)
 certs/output/
@@ -20,3 +20,6 @@ Thumbs.db
 
 # Docker volumes (local data)
 docker/data/
+
+# Testing stuff
+# scaffolding/

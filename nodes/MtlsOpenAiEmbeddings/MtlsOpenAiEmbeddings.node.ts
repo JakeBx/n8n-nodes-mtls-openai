@@ -11,7 +11,9 @@ import {
 import { OpenAIEmbeddings, type ClientOptions } from '@langchain/openai';
 import {
 	createHttpsAgent,
+	createMtlsFetch,
 	buildCustomHeaders,
+	debugLog,
 	type IMtlsOpenAiApiCredentials,
 } from '../utils/sslHelper';
 
@@ -201,29 +203,25 @@ export class MtlsOpenAiEmbeddings implements INodeType {
 			customHeaders?: { values?: Array<{ name: string; value: string }> };
 		};
 
-		// Build HTTPS agent for mTLS from credential SSL fields
-		const httpsAgent = createHttpsAgent(credentials);
+		// Build custom fetch for mTLS — bypasses the OpenAI SDK's httpAgent option
+		// which is silently dropped by Node.js 22 native fetch (undici).
+		const mtlsFetch = createMtlsFetch(credentials);
+		debugLog('Embeddings supplyData: mtlsFetch created =', !!mtlsFetch,
+			'| baseUrl hostname =', new URL(credentials.baseUrl).hostname);
 
 		// Build custom headers from node options
 		const customHeaders = buildCustomHeaders(options.customHeaders);
 
-		// Configure client options
-		const clientOptions: ClientOptions = {};
-		if (httpsAgent) {
-			clientOptions.httpAgent = httpsAgent;
-		}
-		if (Object.keys(customHeaders).length > 0) {
-			clientOptions.defaultHeaders = customHeaders;
-		}
+		// Assemble only the ClientOptions fields that are actually set
+		const configuration: ClientOptions = { baseURL: credentials.baseUrl };
+		if (mtlsFetch) configuration.fetch = mtlsFetch;
+		if (Object.keys(customHeaders).length > 0) configuration.defaultHeaders = customHeaders;
 
 		// Build OpenAIEmbeddings configuration
 		const embeddingsConfig: ConstructorParameters<typeof OpenAIEmbeddings>[0] = {
 			modelName: model,
 			openAIApiKey: credentials.apiKey || 'not-needed',
-			configuration: {
-				baseURL: credentials.baseUrl,
-				...clientOptions,
-			},
+			configuration,
 		};
 
 		if (options.batchSize !== undefined) {

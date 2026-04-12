@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-mtls-openai",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "n8n community nodes for OpenAI-compatible Chat Model and Embeddings with mTLS (mutual TLS) x509 client certificate authentication — for enterprise users connecting to AI inference endpoints behind auth proxies",
   "keywords": [
     "n8n-community-node-package",
